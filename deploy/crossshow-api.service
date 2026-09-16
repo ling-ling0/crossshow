@@ -1,0 +1,33 @@
+# CrossShow API systemd 服务（直连二进制部署，适用于小内存服务器）。
+# 安装：
+#   sudo cp deploy/crossshow-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now crossshow-api
+# 注意：二进制固定放在 /opt/crossshow/crossshow-api，数据在 /opt/crossshow/data。
+# 如需改监听端口/时区，改 Environment 行后 systemctl restart crossshow-api。
+
+[Unit]
+Description=CrossShow API server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/crossshow
+ExecStart=/opt/crossshow/crossshow-api
+Environment=CROSSSHOW_LISTEN_ADDR=:8080
+Environment=CROSSSHOW_DB_PATH=/opt/crossshow/data/crossshow.db
+Environment=CROSSSHOW_DEFAULT_TIMEZONE=Asia/Shanghai
+Environment=CROSSSHOW_LOG_LEVEL=info
+Environment=CROSSSHOW_SHUTDOWN_TIMEOUT=15s
+# 优雅关闭：应用内部会停接收新请求并等待在途请求完成
+KillSignal=SIGTERM
+TimeoutStopSec=20
+# 崩溃自动拉起
+Restart=on-failure
+RestartSec=3
+# 轻量资源约束（1.6GB 内存服务器）
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

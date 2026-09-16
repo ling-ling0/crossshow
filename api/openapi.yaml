@@ -1,0 +1,654 @@
+# CrossShow API 契约草案（对应开发文档 v0.1 第 7 节）。
+# 统一前缀 /api/v1；JSON 编码；UTC 时间用 RFC 3339；日期用 YYYY-MM-DD。
+# 范围查询 from 含、to 不含，按日历时区解释；单次跨度不超过 93 天，完整返回不截断。
+# 所有写请求必须携带 Idempotency-Key 头。
+openapi: 3.0.3
+info:
+  title: CrossShow API
+  version: 0.1.0
+  description: |
+    个人时间安排应用后端。单用户部署，首版无鉴权（已知风险，见开发文档 9.2）。
+
+    错误响应统一格式：
+      {"error":{"code":"...","message":"...","details":{}}}
+
+    常用错误码：
+      VALIDATION_ERROR    400 输入错误
+      NOT_FOUND           404 不存在或已删除
+      VERSION_CONFLICT    409 事件/系列版本冲突（expected_version 不匹配）
+      PREVIEW_EXPIRED     409 预览令牌失效（版本变化 / 成员变化 / 已开始 / 过期）
+      IDEMPOTENCY_CONFLICT 409 相同幂等键配不同请求内容
+      INTERNAL            500 内部错误
+      UNAVAILABLE         503 临时不可用（含 SQLite busy，可重试）
+
+    幂等规则：相同键 + 相同请求（方法、路径、摘要一致）→ 返回原结果；
+    相同键 + 不同内容 → 409 IDEMPOTENCY_CONFLICT。幂等记录与业务变更同事务保存。
+servers:
+  - url: http://{host}:{port}
+    variables:
+      host:
+        default: localhost
+      port:
+        default: "8080"
+tags:
+  - name: meta
+  - name: events
+  - name: series
+
+paths:
+  /healthz:
+    get:
+      tags: [meta]
+      summary: 进程存活状态
+      operationId: getHealthz
+      responses:
+        "200":
+          description: 存活
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/config:
+    get:
+      tags: [meta]
+      summary: 日历时区与支持能力
+      operationId: getConfig
+      responses:
+        "200":
+          description: 服务端配置
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigResponse"
+
+  /api/v1/events:
+    get:
+      tags: [events]
+      summary: 获取日期范围内所有相交事件
+      operationId: listEvents
+      description: |
+        from 含、to 不含，按日历时区的日期解释。普通事件与转换后的时间窗口
+        相交即返回；全天事件按日期相交判断。含软删除之外的已删除事件不返回。
+        返回整个窗口的完整结果，不做静默截断。
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/LocalDate"
+          description: 起始日期（含）
+        - name: to
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/LocalDate"
+          description: 结束日期（不含）
+      responses:
+        "200":
+          description: 事件列表（含系列信息）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventListResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+    post:
+      tags: [events]
+      summary: 创建单次或有限重复事件
+      operationId: createEvent
+      description: |
+        repeat 缺省时创建单次事件；repeat 存在时在一个事务中生成 count 个
+        独立事件（共享 series_id，occurrence_index 从 0 开始）。
+        重复次数包含首次。
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventRequest"
+      responses:
+        "201":
+          description: 已创建，返回生成的事件（ID 列表随之可得）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateEventResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/events/{id}:
+    parameters:
+      - $ref: "#/components/parameters/EventId"
+    get:
+      tags: [events]
+      summary: 单个事件及系列信息
+      operationId: getEvent
+      responses:
+        "200":
+          description: 事件详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventDetailResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [events]
+      summary: 仅修改本次
+      operationId: patchEvent
+      description: |
+        仅修改选中事件本身，携带 expected_version 做乐观并发控制。
+        仅传播请求中实际出现的字段。需要"本次及以后"请走 series-change-* 接口。
+        已删除事件返回 404。
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchEventRequest"
+      responses:
+        "200":
+          description: 修改后的完整事件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventMutationResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    delete:
+      tags: [events]
+      summary: 仅删除本次（软删除）
+      operationId: deleteEvent
+      description: |
+        软删除单个事件；重复总次数不变，序号不重新排列，不补生成新实例。
+        需要"本次及以后"删除请走 series-change-* 接口。
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: expected_version
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: 删除成功，返回删除后的事件状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventMutationResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/events/{id}/series-change-preview:
+    post:
+      tags: [series]
+      summary: 预览"本次及以后"修改／删除
+      operationId: previewSeriesChange
+      description: |
+        目标集合：同系列中 occurrence_index 不小于选中事件、尚未删除且未结束的
+        事件（进行中的事件未结束，可被选中并参与批量修改，即支持修改当前及后续）。
+        选中已结束的事件时返回 400。
+        返回受影响数量、服务端生成的操作摘要和有时效的令牌。
+        若提交时有目标已结束、版本改变或成员变化，预览失效（PREVIEW_EXPIRED）。
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SeriesChangePreviewRequest"
+      responses:
+        "200":
+          description: 预览结果（含令牌与摘要）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesChangePreviewResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /api/v1/events/{id}/series-change-commit:
+    post:
+      tags: [series]
+      summary: 按预览令牌提交事务
+      operationId: commitSeriesChange
+      description: |
+        令牌绑定预览时的内容；提交不得用新内容替换令牌绑定的内容。
+        在一个事务内应用，要么全部成功要么全部回滚。
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SeriesChangeCommitRequest"
+      responses:
+        "200":
+          description: 已提交，返回受影响的事件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeriesChangeCommitResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+      description: 客户端生成的唯一键（建议 UUID），写请求必带
+    EventId:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/UUID"
+
+  responses:
+    ValidationError:
+      description: 输入错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: 不存在或已删除
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: 版本冲突或幂等冲突
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unavailable:
+      description: 临时不可用（可重试）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    UUID:
+      type: string
+      format: uuid
+    LocalDate:
+      type: string
+      format: date
+      pattern: '^\d{4}-\d{2}-\d{2}$'
+    UTCDateTime:
+      type: string
+      format: date-time
+      description: RFC 3339 UTC（Z 后缀）
+
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+          description: 面向用户的中文提示
+        details:
+          type: object
+          additionalProperties: {}
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+
+    ConfigResponse:
+      type: object
+      required: [timezone, capabilities, server_time]
+      properties:
+        timezone:
+          type: string
+          example: Asia/Shanghai
+        capabilities:
+          type: object
+          properties:
+            max_repeat_count:
+              type: integer
+              example: 520
+            max_query_span_days:
+              type: integer
+              example: 93
+            min_title_length:
+              type: integer
+              example: 1
+            max_title_length:
+              type: integer
+              example: 200
+            max_notes_length:
+              type: integer
+              example: 10000
+        server_time:
+          $ref: "#/components/schemas/UTCDateTime"
+
+    RepeatSpec:
+      type: object
+      required: [count]
+      properties:
+        type:
+          type: string
+          enum: [daily, weekdays, weekly, biweekly]
+          description: |
+            重复类型：daily=每天（本地日期 +1）；
+            weekdays=工作日（周一至周五，跳过周末）；
+            weekly=每周（本地日期 +7）；
+            biweekly=每双周（本地日期 +14）。
+            旧客户端可改传 interval_weeks（1=weekly，2=biweekly）。
+        interval_weeks:
+          type: integer
+          enum: [1, 2]
+          description: 旧契约字段；type 缺省时 1=每周、2=每双周
+        count:
+          type: integer
+          minimum: 1
+          maximum: 520
+          description: 总次数，包含首次
+
+    EventBase:
+      type: object
+      required: [id, title, notes, all_day, timezone, version, created_at, updated_at]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        series_id:
+          $ref: "#/components/schemas/UUID"
+          nullable: true
+        occurrence_index:
+          type: integer
+          minimum: 0
+          nullable: true
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        notes:
+          type: string
+          maxLength: 10000
+          description: 默认空字符串
+        all_day:
+          type: boolean
+        start_at:
+          $ref: "#/components/schemas/UTCDateTime"
+          nullable: true
+          description: 普通事件开始（UTC）；全天为空
+        end_at:
+          $ref: "#/components/schemas/UTCDateTime"
+          nullable: true
+          description: 普通事件结束（UTC，不含）；全天为空
+        start_date:
+          $ref: "#/components/schemas/LocalDate"
+          nullable: true
+          description: 全天开始日期（含）；普通事件为空
+        end_date_exclusive:
+          $ref: "#/components/schemas/LocalDate"
+          nullable: true
+          description: 全天结束日期（不含）；普通事件为空
+        timezone:
+          type: string
+          description: 日历时区（IANA），首版固定为服务端默认时区
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        created_at:
+          $ref: "#/components/schemas/UTCDateTime"
+        updated_at:
+          $ref: "#/components/schemas/UTCDateTime"
+
+    Event:
+      allOf:
+        - $ref: "#/components/schemas/EventBase"
+        - type: object
+          properties:
+            series_version:
+              type: integer
+              format: int64
+              nullable: true
+              description: 所属系列当前版本；非系列事件为空
+
+    EventListResponse:
+      type: object
+      required: [events, server_time]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+        server_time:
+          $ref: "#/components/schemas/UTCDateTime"
+
+    EventDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/Event"
+        - type: object
+          properties:
+            series:
+              type: object
+              nullable: true
+              description: 所属系列信息；非系列事件为空
+              properties:
+                id:
+                  $ref: "#/components/schemas/UUID"
+                repeat_type:
+                  type: string
+                  enum: [daily, weekdays, weekly, biweekly]
+                interval_weeks:
+                  type: integer
+                  enum: [1, 2]
+                occurrence_count:
+                  type: integer
+                timezone:
+                  type: string
+                version:
+                  type: integer
+                  format: int64
+                remaining_after_index:
+                  type: integer
+                  description: occurrence_index 不小于本事件的、未删除且未结束的成员数
+
+    CreateEventRequest:
+      type: object
+      required: [title, all_day, timezone]
+      properties:
+        title:
+          type: string
+          description: 去除首尾空白后 1–200 字符
+        notes:
+          type: string
+          maxLength: 10000
+        all_day:
+          type: boolean
+        start_at:
+          $ref: "#/components/schemas/UTCDateTime"
+          description: 普通事件开始（UTC）。all_day=false 必填
+        end_at:
+          $ref: "#/components/schemas/UTCDateTime"
+          description: 普通事件结束（UTC，不含）。all_day=false 必填且晚于 start_at
+        start_date:
+          $ref: "#/components/schemas/LocalDate"
+          description: 全天开始日期（含）。all_day=true 必填
+        end_date_exclusive:
+          $ref: "#/components/schemas/LocalDate"
+          description: 全天结束日期（不含），须晚于 start_date。all_day=true 必填
+        timezone:
+          type: string
+          description: 日历时区；首版必须等于服务端默认时区
+        repeat:
+          $ref: "#/components/schemas/RepeatSpec"
+
+    CreateEventResponse:
+      type: object
+      required: [events, server_time]
+      properties:
+        event_ids:
+          type: array
+          items:
+            $ref: "#/components/schemas/UUID"
+        series_id:
+          $ref: "#/components/schemas/UUID"
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+        server_time:
+          $ref: "#/components/schemas/UTCDateTime"
+
+    PatchEventRequest:
+      type: object
+      required: [expected_version]
+      description: 仅出现需要修改的字段；未出现字段保持原值
+      properties:
+        expected_version:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        notes:
+          type: string
+          maxLength: 10000
+        start_at:
+          $ref: "#/components/schemas/UTCDateTime"
+        end_at:
+          $ref: "#/components/schemas/UTCDateTime"
+        start_date:
+          $ref: "#/components/schemas/LocalDate"
+        end_date_exclusive:
+          $ref: "#/components/schemas/LocalDate"
+
+    EventMutationResponse:
+      type: object
+      required: [event, server_time]
+      properties:
+        event:
+          $ref: "#/components/schemas/Event"
+        server_time:
+          $ref: "#/components/schemas/UTCDateTime"
+
+    SeriesChangePreviewRequest:
+      type: object
+      required: [action, expected_version]
+      properties:
+        action:
+          type: string
+          enum: [update, delete]
+        expected_version:
+          type: integer
+          format: int64
+          description: 选中事件的当前版本，用于提交前一致性检查
+        changes:
+          type: object
+          description: action=update 时必填；语义见开发文档 5.3（仅传播实际改变的字段）
+          properties:
+            title:
+              type: string
+            notes:
+              type: string
+            start_at:
+              $ref: "#/components/schemas/UTCDateTime"
+            end_at:
+              $ref: "#/components/schemas/UTCDateTime"
+            start_date:
+              $ref: "#/components/schemas/LocalDate"
+            end_date_exclusive:
+              $ref: "#/components/schemas/LocalDate"
+
+    SeriesChangePreviewResponse:
+      type: object
+      required: [affected_count, digest, token, expires_at, server_time]
+      properties:
+        affected_count:
+          type: integer
+          description: 目标集合大小（含选中事件）
+        digest:
+          type: string
+          description: 服务端生成的操作摘要，用于界面确认展示
+        token:
+          type: string
+          description: 有时效的预览令牌
+        expires_at:
+          $ref: "#/components/schemas/UTCDateTime"
+        server_time:
+          $ref: "#/components/schemas/UTCDateTime"
+
+    SeriesChangeCommitRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+
+    SeriesChangeCommitResponse:
+      type: object
+      required: [events, server_time]
+      properties:
+        events:
+          type: array
+          description: 提交后目标集合的当前状态
+          items:
+            $ref: "#/components/schemas/Event"
+        server_time:
+          $ref: "#/components/schemas/UTCDateTime"
