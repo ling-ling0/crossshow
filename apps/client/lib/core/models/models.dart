@@ -4,7 +4,8 @@
 /// YYYY-MM-DD 文本。展示转换统一走 core/time/calendar_time.dart。
 library;
 
-/// 普通事件 / 全天事件 / 重复系列成员的统一表示。
+/// 普通事件 / 全天事件 / 重复系列成员 / 待办的统一表示。
+/// 待办是没有固定时间的记录：不关联任何日期，日视图的待办栏展示全部待办。
 class Event {
   Event({
     required this.id,
@@ -13,6 +14,7 @@ class Event {
     required this.title,
     required this.notes,
     required this.allDay,
+    this.isTodo = false,
     required this.timezone,
     required this.version,
     this.seriesVersion,
@@ -28,6 +30,9 @@ class Event {
   final String title;
   final String notes;
   final bool allDay;
+
+  /// 待办：没有固定时间但需要做的事情（纯记录，不关联日期）。
+  final bool isTodo;
 
   /// 普通事件：UTC 时间；全天为空。
   final DateTime? startAt;
@@ -50,6 +55,7 @@ class Event {
         title: j['title'] as String,
         notes: (j['notes'] as String?) ?? '',
         allDay: j['all_day'] as bool,
+        isTodo: (j['is_todo'] as bool?) ?? false,
         startAt: j['start_at'] == null
             ? null
             : DateTime.parse(j['start_at'] as String).toUtc(),
@@ -115,6 +121,7 @@ class CreateEventInput {
     required this.allDay,
     required this.timezone,
     this.notes = '',
+    this.isTodo = false,
     this.startAt,
     this.endAt,
     this.startDate,
@@ -126,6 +133,10 @@ class CreateEventInput {
   final String title;
   final String notes;
   final bool allDay;
+
+  /// 待办（无固定时间的记录）：allDay 必须为 false，不携带日期/时间，不支持重复。
+  final bool isTodo;
+
   final DateTime? startAt;
   final DateTime? endAt;
   final String? startDate;
@@ -140,8 +151,9 @@ class CreateEventInput {
         'title': title,
         'notes': notes,
         'all_day': allDay,
-        if (!allDay) 'start_at': startAt!.toUtc().toIso8601String(),
-        if (!allDay) 'end_at': endAt!.toUtc().toIso8601String(),
+        'is_todo': isTodo,
+        if (!allDay && !isTodo) 'start_at': startAt!.toUtc().toIso8601String(),
+        if (!allDay && !isTodo) 'end_at': endAt!.toUtc().toIso8601String(),
         if (allDay) 'start_date': startDate,
         if (allDay) 'end_date_exclusive': endDateExclusive,
         'timezone': timezone,

@@ -142,5 +142,53 @@ void main() {
       expect(e.endDateExclusive, '2026-09-17');
       expect(e.isSeriesMember, isFalse);
     });
+
+    test('待办：is_todo 解析与提交', () {
+      final withFlag = Event.fromJson({
+        'id': 't1',
+        'title': '买牛奶',
+        'notes': '',
+        'all_day': false,
+        'is_todo': true,
+        'start_at': null,
+        'end_at': null,
+        'start_date': null,
+        'end_date_exclusive': null,
+        'timezone': 'Asia/Shanghai',
+        'version': 1,
+        'created_at': '2026-09-14T00:00:00Z',
+        'updated_at': '2026-09-14T00:00:00Z',
+      });
+      expect(withFlag.isTodo, isTrue);
+      // 旧服务端 / 缺省字段：视为普通事件
+      final withoutFlag = Event.fromJson({
+        'id': 't2',
+        'title': '课程',
+        'notes': '',
+        'all_day': false,
+        'start_at': '2026-09-14T01:00:00.000Z',
+        'end_at': '2026-09-14T02:00:00.000Z',
+        'timezone': 'Asia/Shanghai',
+        'version': 1,
+        'created_at': '2026-09-14T00:00:00Z',
+        'updated_at': '2026-09-14T00:00:00Z',
+      });
+      expect(withoutFlag.isTodo, isFalse);
+
+      final input = CreateEventInput(
+        title: '买牛奶',
+        allDay: false,
+        isTodo: true,
+        timezone: 'Asia/Shanghai',
+      );
+      final j = input.toJson();
+      expect(j['is_todo'], isTrue);
+      expect(j['all_day'], isFalse);
+      // 待办不携带任何日期/时间字段
+      expect(j.containsKey('start_at'), isFalse);
+      expect(j.containsKey('end_at'), isFalse);
+      expect(j.containsKey('start_date'), isFalse);
+      expect(j.containsKey('end_date_exclusive'), isFalse);
+    });
   });
 }

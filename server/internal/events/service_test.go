@@ -115,6 +115,17 @@ func allDayInput(title, start, endExcl string, repeat *RepeatSpec) CreateInput {
 	}
 }
 
+// todoInput 待办（没有固定时间的记录）：不携带任何日期/时间字段。
+func todoInput(title string) CreateInput {
+	return CreateInput{
+		Title:    title,
+		Notes:    "",
+		AllDay:   false,
+		IsTodo:   true,
+		Timezone: "Asia/Shanghai",
+	}
+}
+
 func getEvent(t *testing.T, s *Service, id string) Event {
 	t.Helper()
 	e, err := dbGetEvent(context.Background(), s.DB, id)
@@ -337,6 +348,99 @@ func TestRepeatSeriesExpansion(t *testing.T) {
 			t.Fatal("次数 1 应生成 1 个事件且有系列")
 		}
 	})
+}
+
+// ---- 待办（无固定时间、不关联日期，文档 4.3 待办栏） ----
+
+func TestTodoCreateAndList(t *testing.T) {
+	s, _ := newTestService(t)
+	res := mustCreate(t, s, todoInput("买牛奶"))
+	if res.SeriesID != nil || len(res.EventIDs) != 1 {
+		t.Fatalf("待办应为单次事件: %+v", res)
+	}
+	e := getEvent(t, s, res.EventIDs[0])
+	if !e.IsTodo || e.AllDay {
+		t.Fatalf("待办标记错误: %+v", e)
+	}
+	if e.StartAt != nil || e.EndAt != nil || e.StartDate != nil || e.EndDateExclusive != nil {
+		t.Fatalf("待办不应携带日期/时间字段: %+v", e)
+	}
+	// 待办不属于任何日期：任意窗口查询都返回
+	lst, err := s.ListRange(context.Background(), "2026-09-14", "2026-09-15")
+	if err != nil || len(lst.Events) != 1 || !lst.Events[0].IsTodo {
+		t.Fatalf("当日窗口应返回待办 (%v)", err)
+	}
+	lst2, err := s.ListRange(context.Background(), "2027-01-01", "2027-02-01")
+	if err != nil || len(lst2.Events) != 1 || !lst2.Events[0].IsTodo {
+		t.Fatalf("任意窗口都应返回待办 (%v)", err)
+	}
+}
+
+func TestTodoValidation(t *testing.T) {
+	s, _ := newTestService(t)
+	withAllDay := todoInput("x")
+	withAllDay.AllDay = true
+	withTimes := todoInput("x")
+	st := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	en := st.Add(time.Hour)
+	withTimes.StartAt, withTimes.EndAt = &st, &en
+	withDates := todoInput("x")
+	sd, ed := "2026-09-14", "2026-09-15"
+	withDates.StartDate, withDates.EndDateExclusive = &sd, &ed
+	withRepeat := todoInput("x")
+	withRepeat.Repeat = &RepeatSpec{IntervalWeeks: 1, Count: 2}
+
+	cases := []struct {
+		name string
+		in   CreateInput
+	}{
+		{"待办不使用全天标记", withAllDay},
+		{"待办不接受时间字段", withTimes},
+		{"待办不接受日期字段", withDates},
+		{"待办不支持重复", withRepeat},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svcCreate(t, s, tc.in)
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("期望 ValidationError, 实际 %v", err)
+			}
+		})
+	}
+}
+
+func TestTodoPatch(t *testing.T) {
+	s, _ := newTestService(t)
+	res := mustCreate(t, s, todoInput("买牛奶"))
+	id := res.EventIDs[0]
+
+	// 改标题/备注：正常
+	st, _, err := s.Patch(context.Background(), id, PatchInput{
+		ExpectedVersion: ptrI64(1), Title: ptrStr("买牛奶和鸡蛋"), Notes: ptrStr("顺路"),
+	}, Idempotency{Key: RandHex(), Hash: RandHex()})
+	if err != nil || st != 200 {
+		t.Fatalf("待办改标题失败: %v", err)
+	}
+
+	// 待办不接受日期/时间字段 → 400
+	newStart := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
+	newEnd := newStart.Add(time.Hour)
+	cases := []PatchInput{
+		{ExpectedVersion: ptrI64(2), StartDate: ptrStr("2026-09-15")},
+		{ExpectedVersion: ptrI64(2), StartAt: &newStart, EndAt: &newEnd},
+	}
+	for i, in := range cases {
+		_, _, err = s.Patch(context.Background(), id, in, Idempotency{Key: RandHex(), Hash: RandHex()})
+		var ve *ValidationError
+		if !errors.As(err, &ve) {
+			t.Fatalf("用例 %d: 期望 ValidationError, 实际 %v", i, err)
+		}
+	}
+	e := getEvent(t, s, id)
+	if !e.IsTodo || e.StartDate != nil || e.StartAt != nil {
+		t.Fatalf("失败的修改不应改变待办: %+v", e)
+	}
 }
 
 // ---- 幂等（文档 12：网络） ----

@@ -106,12 +106,14 @@ class _CalendarHomePageState extends State<CalendarHomePage>
       context: context,
       builder: (ctx) {
         final theme = Theme.of(ctx);
-        final timeText = event.allDay
-            ? (event.startDate == CalendarTime.addDays(event.endDateExclusive!, -1)
-                ? '全天（${event.startDate}）'
-                : '全天 ${event.startDate} ~ ${CalendarTime.addDays(event.endDateExclusive!, -1)}')
-            : '${CalendarTime.formatHm(event.startAt!)} – ${CalendarTime.formatHm(event.endAt!)}'
-                '（${event.startDate ?? CalendarTime.dateKeyOfUtc(event.startAt!)}）';
+        final timeText = event.isTodo
+            ? '待办（无固定时间，不关联日期）'
+            : event.allDay
+                ? (event.startDate == CalendarTime.addDays(event.endDateExclusive!, -1)
+                    ? '全天（${event.startDate}）'
+                    : '全天 ${event.startDate} ~ ${CalendarTime.addDays(event.endDateExclusive!, -1)}')
+                : '${CalendarTime.formatHm(event.startAt!)} – ${CalendarTime.formatHm(event.endAt!)}'
+                    '（${event.startDate ?? CalendarTime.dateKeyOfUtc(event.startAt!)}）';
         return AlertDialog(
           title: Row(
             children: [
@@ -119,6 +121,8 @@ class _CalendarHomePageState extends State<CalendarHomePage>
                 child: Text(event.title,
                     style: const TextStyle(fontSize: 18)),
               ),
+              if (event.isTodo)
+                Icon(Icons.task_alt, size: 18, color: theme.colorScheme.tertiary),
               if (event.isSeriesMember)
                 Icon(Icons.repeat, size: 18, color: theme.colorScheme.secondary),
             ],

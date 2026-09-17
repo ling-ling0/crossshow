@@ -65,6 +65,7 @@ class _DayTimelineViewState extends State<DayTimelineView> {
     final gridColor = isDark ? Colors.white12 : const Color(0x1A000000);
 
     final events = sync.eventsForDay(widget.dayKey);
+    final todos = sync.todos(); // 待办不关联日期：展示全部待办
     final allDay = events.where((e) => e.allDay).toList();
     final groups =
         groupIntoColumns(fragmentsForDay(events, widget.dayKey, calendarOffsetMinutes));
@@ -74,6 +75,57 @@ class _DayTimelineViewState extends State<DayTimelineView> {
 
     return Column(
       children: [
+        if (todos.isNotEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.tertiaryContainer.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.task_alt,
+                        size: 13,
+                        color: theme.colorScheme.onTertiaryContainer),
+                    const SizedBox(width: 4),
+                    Text('待办 · 无固定时间',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: theme.colorScheme.onTertiaryContainer)),
+                  ],
+                ),
+                for (final e in todos)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: InkWell(
+                      onTap: () => widget.onEventTap(e),
+                      child: widget.hideContent
+                          ? const SizedBox(height: 12)
+                          : Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    e.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: theme
+                                            .colorScheme.onTertiaryContainer),
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         if (allDay.isNotEmpty)
           Container(
             width: double.infinity,

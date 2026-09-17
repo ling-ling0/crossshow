@@ -234,6 +234,7 @@ func (s *Service) createTx(ctx context.Context, tx *sql.Tx, in CreateInput) (int
 		Title:            in.Title,
 		Notes:            in.Notes,
 		AllDay:           in.AllDay,
+		IsTodo:           in.IsTodo,
 		StartAt:          in.StartAt,
 		EndAt:            in.EndAt,
 		StartDate:        in.StartDate,
@@ -245,6 +246,10 @@ func (s *Service) createTx(ctx context.Context, tx *sql.Tx, in CreateInput) (int
 	}
 	if err := validateEvent(&e, s.DefaultTZ); err != nil {
 		return 0, nil, err
+	}
+
+	if in.IsTodo && in.Repeat != nil { // 待办无固定时间，不参与重复
+		return 0, nil, invalid("repeat", "待办不支持重复")
 	}
 
 	if in.Repeat == nil { // 单次事件：无 series_id（文档 5.2）

@@ -69,6 +69,15 @@ func validateEvent(e *Event, defaultTZ string) error {
 	if e.Timezone != defaultTZ {
 		return invalid("timezone", "首版仅支持服务端默认时区 %s", defaultTZ)
 	}
+	if e.IsTodo { // 待办：没有固定时间的记录，不关联任何日期
+		if e.AllDay {
+			return invalid("all_day", "待办不使用全天标记：is_todo 与 all_day 互斥")
+		}
+		if e.StartAt != nil || e.EndAt != nil || e.StartDate != nil || e.EndDateExclusive != nil {
+			return invalid("is_todo", "待办不接受开始/结束时间或日期字段")
+		}
+		return nil
+	}
 	if e.AllDay {
 		if e.StartAt != nil || e.EndAt != nil {
 			return invalid("start_at", "全天事件不接受时间字段")

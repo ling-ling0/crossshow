@@ -23,12 +23,13 @@ class DayListView extends StatelessWidget {
   Widget build(BuildContext context) {
     final sync = context.watch<SyncController>();
     final events = sync.eventsForDay(dayKey);
+    final todos = sync.todos(); // 待办不关联日期：展示全部待办
     final allDay = events.where((e) => e.allDay).toList();
     final timed = events.where((e) => !e.allDay).toList();
 
     return RefreshIndicator(
       onRefresh: () => sync.refreshAll(),
-      child: timed.isEmpty && allDay.isEmpty
+      child: timed.isEmpty && allDay.isEmpty && todos.isEmpty
           ? ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
@@ -54,7 +55,18 @@ class DayListView extends StatelessWidget {
                     subtitle: '全天',
                     onTap: () => onEventTap(e),
                   ),
-                if (allDay.isNotEmpty && timed.isNotEmpty)
+                if (todos.isNotEmpty) ...[
+                  if (allDay.isNotEmpty) const Divider(height: 16),
+                  const _SectionLabel(icon: Icons.task_alt, text: '待办 · 无固定时间'),
+                  for (final e in todos)
+                    _EventCard(
+                      event: e,
+                      subtitle: '无固定时间',
+                      todo: true,
+                      onTap: () => onEventTap(e),
+                    ),
+                ],
+                if (timed.isNotEmpty && (allDay.isNotEmpty || todos.isNotEmpty))
                   const Divider(height: 16),
                 for (final e in timed)
                   _EventCard(
@@ -69,16 +81,47 @@ class DayListView extends StatelessWidget {
   }
 }
 
+/// 分组标题（待办栏）。
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
+      child: Row(
+        children: [
+          Icon(icon, size: 14, color: theme.colorScheme.tertiary),
+          const SizedBox(width: 4),
+          Text(text,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.tertiary)),
+        ],
+      ),
+    );
+  }
+}
+
 class _EventCard extends StatelessWidget {
   const _EventCard({
     required this.event,
     required this.subtitle,
     required this.onTap,
+    this.todo = false,
   });
 
   final Event event;
   final String subtitle;
   final VoidCallback onTap;
+
+  /// 待办卡片：三级色标识，与普通/全天事件区分。
+  final bool todo;
 
   @override
   Widget build(BuildContext context) {
@@ -92,9 +135,11 @@ class _EventCard extends StatelessWidget {
           width: 4,
           height: 40,
           decoration: BoxDecoration(
-            color: event.allDay
-                ? theme.colorScheme.secondary
-                : theme.colorScheme.primary,
+            color: todo
+                ? theme.colorScheme.tertiary
+                : event.allDay
+                    ? theme.colorScheme.secondary
+                    : theme.colorScheme.primary,
             borderRadius: BorderRadius.circular(2),
           ),
         ),

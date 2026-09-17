@@ -1,6 +1,8 @@
 /// 事件编辑器（开发文档 4.3 / 5.3 / 8）。
 ///
 /// * 标题必填（去首尾空白 1–200）；备注可空 ≤10,000；
+/// * 待办（无固定时间）是纯记录：不关联任何日期，仅创建时可选，
+///   不支持重复，显示在日视图待办栏；
 /// * 全天开关切换日期/时间字段（均使用包含式日期语义，结束字段按
 ///   服务端"不含"约定提交）；
 /// * 创建时可选不重复 / 每周 / 每双周 + 总次数（含首次）；
@@ -35,6 +37,7 @@ class EventEditorPage extends StatefulWidget {
 class _EventEditorPageState extends State<EventEditorPage> {
   late final TextEditingController _title;
   late final TextEditingController _notes;
+  late bool _isTodo; // 待办：无固定时间（仅创建时可开启）
   late bool _allDay;
   late String _startDate; // 包含
   late String _endDate; // 界面展示的结束日期（全天=最后一天含；普通=结束日期）
@@ -58,6 +61,7 @@ class _EventEditorPageState extends State<EventEditorPage> {
     _title = TextEditingController(text: orig?.title ?? '');
     _notes = TextEditingController(text: orig?.notes ?? '');
     if (orig == null) {
+      _isTodo = false;
       _allDay = false;
       _startDate = widget.selectedDay;
       _endDate = widget.selectedDay;
@@ -68,6 +72,7 @@ class _EventEditorPageState extends State<EventEditorPage> {
       _repeatType = null;
       _repeatCount = 1;
     } else {
+      _isTodo = orig.isTodo;
       _allDay = orig.allDay;
       if (orig.allDay) {
         _startDate = orig.startDate!;
@@ -110,6 +115,10 @@ class _EventEditorPageState extends State<EventEditorPage> {
     if (_notes.text != _orig.notes) {
       changes['notes'] = _notes.text;
     }
+    if (_orig.isTodo) {
+      // 待办只修改标题/备注：不携带日期/时间字段
+      return changes;
+    }
     if (_orig.allDay) {
       if (_startDate != _orig.startDate!) {
         changes['start_date'] = _startDate;
@@ -127,6 +136,16 @@ class _EventEditorPageState extends State<EventEditorPage> {
   }
 
   CreateEventInput _buildCreate() {
+    if (_isTodo) {
+      // 待办：纯记录，不携带日期/时间，不重复
+      return CreateEventInput(
+        title: _title.text.trim(),
+        notes: _notes.text,
+        allDay: false,
+        isTodo: true,
+        timezone: 'Asia/Shanghai',
+      );
+    }
     if (_allDay) {
       return CreateEventInput(
         title: _title.text.trim(),
@@ -518,47 +537,74 @@ class _EventEditorPageState extends State<EventEditorPage> {
                 ),
               ),
               const SizedBox(height: 12),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('全天'),
-                value: _allDay,
-                onChanged: (v) => setState(() => _allDay = v),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => _pickDate(isEnd: false),
-                      child: Text(_allDay ? '开始：$_startDate' : '日期：$_startDate'),
-                    ),
+              // 待办开关：仅创建时可选（服务端首版不支持与普通/全天互转）
+              if (!_editing || _isTodo)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('待办（无固定时间）'),
+                  subtitle: const Text('不关联日期的记录，显示在日视图的待办栏'),
+                  secondary: const Icon(Icons.task_alt),
+                  value: _isTodo,
+                  onChanged: _editing
+                      ? null
+                      : (v) => setState(() => _isTodo = v),
+                ),
+              if (!_isTodo)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('全天'),
+                  value: _allDay,
+                  onChanged: (v) => setState(() => _allDay = v),
+                ),
+              if (_isTodo)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '待办不关联具体日期与时间，保存后显示在每个日视图的待办栏。',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).hintColor),
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => _pickDate(isEnd: true),
-                      child: Text('$endLabel：$_endDate'),
-                    ),
-                  ),
-                  if (!_allDay) ...[
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: () => _pickTime(isEnd: false),
-                      child: Text(_start.format(context)),
-                    ),
-                    const Text(' – '),
-                    OutlinedButton(
-                      onPressed: () => _pickTime(isEnd: true),
-                      child: Text(_end.format(context)),
+                ),
+              // 待办不携带任何日期/时间字段
+              if (!_isTodo) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => _pickDate(isEnd: false),
+                        child: Text(
+                            _allDay ? '开始：$_startDate' : '日期：$_startDate'),
+                      ),
                     ),
                   ],
-                ],
-              ),
-              if (!_editing) ...[
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => _pickDate(isEnd: true),
+                        child: Text('$endLabel：$_endDate'),
+                      ),
+                    ),
+                    if (!_allDay) ...[
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: () => _pickTime(isEnd: false),
+                        child: Text(_start.format(context)),
+                      ),
+                      const Text(' – '),
+                      OutlinedButton(
+                        onPressed: () => _pickTime(isEnd: true),
+                        child: Text(_end.format(context)),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+              if (!_editing && !_isTodo) ...[
                 const SizedBox(height: 16),
                 const Text('重复'),
                 RadioGroup<String?>(

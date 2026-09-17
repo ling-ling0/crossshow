@@ -24,6 +24,7 @@ type Event struct {
 	Title            string     `json:"title"`
 	Notes            string     `json:"notes"`
 	AllDay           bool       `json:"all_day"`
+	IsTodo           bool       `json:"is_todo"` // 待办：无固定时间，复用全天字段且只占单日
 	StartAt          *time.Time `json:"start_at"`           // 普通事件 UTC；全天为空
 	EndAt            *time.Time `json:"end_at"`             // 半开区间 [start, end)
 	StartDate        *string    `json:"start_date"`         // 全天开始（含）
@@ -107,6 +108,7 @@ type CreateInput struct {
 	Title            string      `json:"title"`
 	Notes            string      `json:"notes"`
 	AllDay           bool        `json:"all_day"`
+	IsTodo           bool        `json:"is_todo"`
 	StartAt          *time.Time  `json:"start_at"`
 	EndAt            *time.Time  `json:"end_at"`
 	StartDate        *string     `json:"start_date"`

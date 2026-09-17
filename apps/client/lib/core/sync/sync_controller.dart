@@ -190,6 +190,8 @@ class SyncController extends ChangeNotifier {
   }
 
   bool _intersectsWindow(Event e, String from, String to) {
+    // 待办不关联日期：出现在所有已加载窗口（范围查询始终返回待办）。
+    if (e.isTodo) return true;
     // 与 API 一致：from 含、to 不含，按日历时区的日期解释（文档 7）。
     final startUtc = CalendarTime.dayStartUtc(from);
     final endUtc = CalendarTime.dayStartUtc(to);
@@ -203,15 +205,27 @@ class SyncController extends ChangeNotifier {
 
   // ---- 读视图 ----
 
-  /// 某日历日的全部事件：全天在前（按开始日期），其后普通事件按
-  /// 日历时区开始时间、结束、ID 排序。
+  /// 全部待办（没有固定时间的记录）：不属于任何一天，
+  /// 日视图的待办栏始终展示完整待办列表。
+  List<Event> todos() {
+    final out = <Event>[];
+    for (final id in _windows.values.expand((s) => s).toSet()) {
+      final e = _events[id];
+      if (e != null && e.isTodo) out.add(e);
+    }
+    out.sort((a, b) => a.id.compareTo(b.id));
+    return out;
+  }
+
+  /// 某日历日的全部事件（不含待办）：全天在前（按开始日期），其后普通
+  /// 事件按日历时区开始时间、结束、ID 排序。
   List<Event> eventsForDay(String dayKey) {
     final dayStartUtc = CalendarTime.dayStartUtc(dayKey);
     final dayEndUtc = dayStartUtc.add(const Duration(days: 1));
     final day = <Event>[];
     for (final id in _windows.values.expand((s) => s).toSet()) {
       final e = _events[id];
-      if (e == null) continue;
+      if (e == null || e.isTodo) continue; // 待办不属于任何一天（见 todos()）
       final hit = e.allDay
           ? CalendarTime.dayStartUtc(e.startDate!)
                   .isBefore(dayEndUtc) &&

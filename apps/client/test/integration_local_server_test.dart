@@ -104,5 +104,50 @@ void main() {
     final after =
         await repo.listRange(tomorrow, CalendarTime.addDays(tomorrow, 30));
     expect(after.where((e) => e.title.startsWith('联调课程')), isEmpty);
+
+    // 7) 待办（没有固定时间的记录）：创建 → 任意窗口查询 → 改标题 → 删除
+    final todoList = await repo.create(
+      CreateEventInput(
+        title: '联调待办',
+        allDay: false,
+        isTodo: true,
+        timezone: 'Asia/Shanghai',
+      ),
+      repo.beginWrite(),
+    );
+    expect(todoList, hasLength(1));
+    expect(todoList.single.isTodo, isTrue);
+    expect(todoList.single.allDay, isFalse);
+    // 待办不关联日期：查询一个无关的远期窗口也能看到
+    final listed2 =
+        await repo.listRange(CalendarTime.addDays(tomorrow, 60),
+            CalendarTime.addDays(tomorrow, 61));
+    expect(listed2.singleWhere((e) => e.title == '联调待办').isTodo, isTrue);
+    final todoPatched = await repo.patch(
+      todoList.single.id,
+      PatchEventInput(
+        expectedVersion: todoList.single.version,
+        title: '联调待办(改)',
+      ),
+      repo.beginWrite(),
+    );
+    expect(todoPatched.title, '联调待办(改)');
+    expect(todoPatched.isTodo, isTrue);
+    // 待办不支持重复 → 400
+    await expectLater(
+      repo.create(
+        CreateEventInput(
+          title: '应失败',
+          allDay: false,
+          isTodo: true,
+          timezone: 'Asia/Shanghai',
+          repeatType: 'daily',
+          repeatCount: 2,
+        ),
+        repo.beginWrite(),
+      ),
+      throwsA(isA<ApiException>().having((e) => e.statusCode, 'status', 400)),
+    );
+    await repo.delete(todoList.single.id, todoPatched.version, repo.beginWrite());
   });
 }

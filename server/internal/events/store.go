@@ -20,7 +20,7 @@ type RowQuerier interface {
 }
 
 const eventSelect = `
-SELECT e.id, e.series_id, e.occurrence_index, e.title, e.notes, e.all_day,
+SELECT e.id, e.series_id, e.occurrence_index, e.title, e.notes, e.all_day, e.is_todo,
        e.start_at, e.end_at, e.start_date, e.end_date_exclusive,
        e.timezone, e.version, e.created_at, e.updated_at, e.deleted_at,
        s.version
@@ -34,6 +34,7 @@ type eventRow struct {
 	Title            string
 	Notes            string
 	AllDay           bool
+	IsTodo           bool
 	StartAt          sql.NullString
 	EndAt            sql.NullString
 	StartDate        sql.NullString
@@ -49,7 +50,7 @@ type eventRow struct {
 func scanEvent(rows interface{ Scan(...any) error }) (Event, error) {
 	var r eventRow
 	if err := rows.Scan(
-		&r.ID, &r.SeriesID, &r.OccurrenceIndex, &r.Title, &r.Notes, &r.AllDay,
+		&r.ID, &r.SeriesID, &r.OccurrenceIndex, &r.Title, &r.Notes, &r.AllDay, &r.IsTodo,
 		&r.StartAt, &r.EndAt, &r.StartDate, &r.EndDateExclusive,
 		&r.Timezone, &r.Version, &r.CreatedAt, &r.UpdatedAt, &r.DeletedAt,
 		&r.SeriesVersion,
@@ -96,6 +97,7 @@ func (r eventRow) toEvent() (Event, error) {
 		Title:     r.Title,
 		Notes:     r.Notes,
 		AllDay:    r.AllDay,
+		IsTodo:    r.IsTodo,
 		Timezone:  r.Timezone,
 		Version:   r.Version,
 		CreatedAt: createdAt,
@@ -156,11 +158,11 @@ func dbInsertEvent(ctx context.Context, q RowQuerier, e Event) error {
 		endDate = *e.EndDateExclusive
 	}
 	_, err := q.ExecContext(ctx, `
-INSERT INTO events (id, series_id, occurrence_index, title, notes, all_day,
+INSERT INTO events (id, series_id, occurrence_index, title, notes, all_day, is_todo,
                     start_at, end_at, start_date, end_date_exclusive,
                     timezone, version, created_at, updated_at, deleted_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-		e.ID, seriesID, occ, e.Title, e.Notes, e.AllDay,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+		e.ID, seriesID, occ, e.Title, e.Notes, e.AllDay, e.IsTodo,
 		startAt, endAt, startDate, endDate,
 		e.Timezone, e.Version, FormatTS(e.CreatedAt), FormatTS(e.UpdatedAt))
 	return err
@@ -180,12 +182,14 @@ func dbGetEvent(ctx context.Context, q RowQuerier, id string) (Event, error) {
 }
 
 // dbListRange 范围查询：普通事件按 UTC 窗口求交，全天事件按日期求交（文档 7）。
-// from 含、to 不含；ws/we 为窗口边界的 UTC 固定精度文本（字典序即时间序）。
+// 待办不关联日期、始终返回。from 含、to 不含；
+// ws/we 为窗口边界的 UTC 固定精度文本（字典序即时间序）。
 func dbListRange(ctx context.Context, q RowQuerier, ws, we, from, to string) ([]Event, error) {
 	rows, err := q.QueryContext(ctx, eventSelect+`
 WHERE e.deleted_at IS NULL
-  AND ((e.all_day = 0 AND e.start_at < ? AND e.end_at > ?)
-    OR (e.all_day = 1 AND e.start_date < ? AND e.end_date_exclusive > ?))`,
+  AND (e.is_todo = 1
+    OR ((e.all_day = 0 AND e.start_at < ? AND e.end_at > ?)
+      OR (e.all_day = 1 AND e.start_date < ? AND e.end_date_exclusive > ?)))`,
 		we, ws, to, from)
 	if err != nil {
 		return nil, err
@@ -242,11 +246,11 @@ func dbUpdateEventColumns(ctx context.Context, q RowQuerier, e Event) error {
 		deletedAt = FormatTS(*e.DeletedAt)
 	}
 	res, err := q.ExecContext(ctx, `
-UPDATE events SET title = ?, notes = ?, all_day = ?, start_at = ?, end_at = ?,
+UPDATE events SET title = ?, notes = ?, all_day = ?, is_todo = ?, start_at = ?, end_at = ?,
                   start_date = ?, end_date_exclusive = ?, version = ?,
                   updated_at = ?, deleted_at = ?
 WHERE id = ?`,
-		e.Title, e.Notes, e.AllDay, startAt, endAt,
+		e.Title, e.Notes, e.AllDay, e.IsTodo, startAt, endAt,
 		startDate, endDate, e.Version,
 		FormatTS(e.UpdatedAt), deletedAt, e.ID)
 	if err != nil {

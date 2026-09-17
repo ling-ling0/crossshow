@@ -427,6 +427,15 @@ components:
           description: 默认空字符串
         all_day:
           type: boolean
+        is_todo:
+          type: boolean
+          default: false
+          description: |
+            待办：没有固定时间但需要做的事情（纯记录）。
+            为 true 时不携带任何时间/日期字段（all_day=false，
+            start_at/end_at/start_date/end_date_exclusive 均为空）；
+            不属于任何日期，范围查询始终返回；
+            PATCH 不提供该字段（待办与普通/全天事件不能互转）。
         start_at:
           $ref: "#/components/schemas/UTCDateTime"
           nullable: true
@@ -518,6 +527,12 @@ components:
           maxLength: 10000
         all_day:
           type: boolean
+        is_todo:
+          type: boolean
+          default: false
+          description: |
+            创建待办（没有固定时间的记录）：须 all_day=false，
+            不提供任何时间/日期字段，也不支持 repeat。
         start_at:
           $ref: "#/components/schemas/UTCDateTime"
           description: 普通事件开始（UTC）。all_day=false 必填
